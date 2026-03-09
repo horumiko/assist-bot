@@ -1101,19 +1101,36 @@ export function setupHandlers(bot: Bot, services: {
 
         pendingTaskStep.set(ctx.from.id, 'status_task_pick');
         pendingStatusTaskList.set(ctx.from.id, taskList);
-        const lines = ['Выбери задачу, для которой хочешь дать статус:'];
+
+        const shortLabel = (value: string) => (value.length > 72 ? `${value.slice(0, 69)}...` : value);
+        const taskButtonById = new Map(taskList.map((task, idx) => [task.id, idx + 1]));
+        const staleInVisibleList = staleTasks.filter((task) => taskButtonById.has(task.id));
+        const staleOutsideVisible = staleTasks.length - staleInVisibleList.length;
+
+        const lines = [
+          '*📝 Дать статус*',
+          '',
+          `Выбери задачу кнопкой ниже \(1\-${taskList.length}\)\.`,
+        ];
+
         if (staleTasks.length > 0) {
-          lines.unshift(`⚠️ Ждут апдейта больше ${thresholdHours}ч: ${staleTasks.length}`);
-          staleTasks.slice(0, 5).forEach((task, i) => {
-            const label = task.content.length > 72 ? `${task.content.slice(0, 69)}...` : task.content;
-            lines.splice(1 + i, 0, `• ${label}`);
+          lines.push('', `*⚠️ Ждут апдейта больше ${thresholdHours}ч:* ${staleTasks.length}`);
+          staleInVisibleList.slice(0, 7).forEach((task) => {
+            const buttonNum = taskButtonById.get(task.id);
+            if (!buttonNum) return;
+            lines.push(`${buttonNum}\. ${escapeMarkdown(shortLabel(task.content))}`);
           });
+          if (staleOutsideVisible > 0) {
+            lines.push(`_Ещё ${staleOutsideVisible} задач вне первых ${taskList.length} в этом списке\._`);
+          }
         }
+
+        lines.push('', '*Все задачи:*');
         taskList.forEach((task, i) => {
-          const label = task.content.length > 72 ? `${task.content.slice(0, 69)}...` : task.content;
-          lines.push(`${i + 1}. ${label}`);
+          lines.push(`${i + 1}\. ${escapeMarkdown(shortLabel(task.content))}`);
         });
         await ctx.reply(lines.join('\n'), {
+          parse_mode: 'Markdown',
           reply_markup: buildListSelectKeyboard(taskList.length, TASK_BACK_TO_TASKS),
         });
       } catch (err) {
