@@ -34,7 +34,7 @@ fi
 
 git fetch origin "$BRANCH"
 git checkout "$BRANCH"
-git reset --hard "origin/$BRANCH"
+git pull --ff-only origin "$BRANCH"
 
 npm ci
 npm run build
