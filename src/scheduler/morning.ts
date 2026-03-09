@@ -9,6 +9,25 @@ import { formatMoney } from '../bot/finance-formatters';
 import { getStatusThresholdHours } from '../config/settings';
 import { logger } from '../utils/logger';
 
+function getTodayIsoInTimezone(): string {
+  const timeZone = process.env.TIMEZONE || 'Europe/Minsk';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day = parts.find((p) => p.type === 'day')?.value;
+  if (!year || !month || !day) {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+  return `${year}-${month}-${day}`;
+}
+
 export async function sendMorningBriefing(
   bot: Bot,
   userId: number,
@@ -75,15 +94,49 @@ export async function sendMorningBriefing(
     if (finance) {
       try {
         const now = new Date();
-        const summary = await finance.getSummary(now.getFullYear(), now.getMonth() + 1);
+        const todayIso = getTodayIsoInTimezone();
+        const [summary, monthData, monthTxWithRecurring] = await Promise.all([
+          finance.getSummary(now.getFullYear(), now.getMonth() + 1),
+          finance.getMonthData(now.getFullYear(), now.getMonth() + 1),
+          finance.getTransactionsWithRecurring(now.getFullYear(), now.getMonth() + 1),
+        ]);
+
+        const netToDate = (txs: Array<{ date: string; type: 'income' | 'expense'; amount: number }>) => txs
+          .filter((tx) => tx.date <= todayIso)
+          .reduce((sum, tx) => sum + (tx.type === 'income' ? tx.amount : -tx.amount), 0);
+
+        const persistedToDate = netToDate(monthData.transactions ?? []);
+        const withRecurringToDate = netToDate(monthTxWithRecurring ?? []);
+        const recurringDelta = withRecurringToDate - persistedToDate;
+        const balanceToday = (summary.balanceToday ?? 0) + recurringDelta;
+
         const finLines = ['💰 *Финансы:*'];
-        finLines.push(`  Баланс: *${formatMoney(summary.balance)} ₽*`);
+        finLines.push(`  Баланс на сегодня: *${formatMoney(balanceToday)} ₽*`);
+
+        const todayOps = (monthTxWithRecurring ?? []).filter((tx) => tx.date === todayIso);
+        if (todayOps.length > 0) {
+          const incomeToday = todayOps.filter((tx) => tx.type === 'income').reduce((s, tx) => s + tx.amount, 0);
+          const expenseToday = todayOps.filter((tx) => tx.type === 'expense').reduce((s, tx) => s + tx.amount, 0);
+          finLines.push(`  Операции на сегодня: +${formatMoney(incomeToday)} / -${formatMoney(expenseToday)} ₽`);
+          todayOps.slice(0, 5).forEach((tx) => {
+            const sign = tx.type === 'expense' ? '−' : '+';
+            const marker = tx.recurrence && tx.recurrence !== 'once' ? ' 🔁' : '';
+            const label = tx.description ?? tx.category;
+            finLines.push(`  • ${sign}${formatMoney(tx.amount)} ₽ — ${label}${marker}`);
+          });
+          if (todayOps.length > 5) {
+            finLines.push(`  _... и ещё ${todayOps.length - 5} операций_`);
+          }
+        } else {
+          finLines.push('  Операции на сегодня: _нет_');
+        }
 
         // Yesterday's spending
-        const yesterday = new Date();
+        const yesterday = new Date(now);
         yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = yesterday.toISOString().split('T')[0];
-        const monthData = await finance.getMonthData(now.getFullYear(), now.getMonth() + 1);
+        const yesterdayStr = new Intl.DateTimeFormat('en-CA', {
+          timeZone: process.env.TIMEZONE || 'Europe/Minsk',
+        }).format(yesterday);
         const yesterdaySpent = (monthData.transactions ?? [])
           .filter(tx => tx.type === 'expense' && tx.date === yesterdayStr)
           .reduce((s, tx) => s + tx.amount, 0);
@@ -105,8 +158,8 @@ export async function sendMorningBriefing(
 
         // Min balance alert
         const minBalance = await finance.getMinBalance();
-        if (minBalance > 0 && summary.balance <= minBalance) {
-          finLines.push(`  🚨 Баланс ${formatMoney(summary.balance)} ₽ — ниже порога ${formatMoney(minBalance)} ₽!`);
+        if (minBalance > 0 && balanceToday <= minBalance) {
+          finLines.push(`  🚨 Баланс ${formatMoney(balanceToday)} ₽ — ниже порога ${formatMoney(minBalance)} ₽!`);
         }
 
         parts.push(finLines.join('\n'));
