@@ -78,6 +78,60 @@ create table if not exists calendar_reminders (
   reminder_sent boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+-- fitness: body measurements (weight, waist)
+create table if not exists body_measurements (
+  id uuid primary key default gen_random_uuid(),
+  date date not null unique,
+  weight_kg numeric,
+  waist_cm numeric,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+-- fitness: daily nutrition log (calories + macros)
+create table if not exists nutrition_log (
+  id uuid primary key default gen_random_uuid(),
+  date date not null unique,
+  calories int,
+  protein_g numeric,
+  fat_g numeric,
+  carbs_g numeric,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+-- fitness: workout sessions
+create table if not exists workout_sessions (
+  id uuid primary key default gen_random_uuid(),
+  date date not null,
+  name text,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+-- fitness: exercise sets within a workout session
+create table if not exists workout_sets (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references workout_sessions(id) on delete cascade,
+  exercise text not null,
+  set_number int not null default 1,
+  reps int,
+  weight_kg numeric,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+-- recurring_confirmations: tracks user decisions for each recurring payment occurrence
+create table if not exists recurring_confirmations (
+  id uuid primary key default gen_random_uuid(),
+  recurring_tx_id text not null,
+  date date not null,
+  action text not null check (action in ('confirmed', 'skipped')),
+  amount numeric,
+  created_at timestamptz not null default now(),
+  unique(recurring_tx_id, date)
+);
 `;
 
 export async function runMigrations(): Promise<void> {

@@ -227,3 +227,58 @@ export function formatTxCard(tx: {
   }
   return lines.join('\n');
 }
+
+const SHORT_MONTH_RU = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const SHORT_DOW_RU = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+
+export function formatDayOpsText(
+  dateIso: string,
+  txs: Array<{ amount: number; type: 'income' | 'expense'; category: string; description?: string; recurrence?: string }>,
+): string {
+  const d = new Date(`${dateIso}T12:00:00`);
+  const day = d.getDate();
+  const monthLabel = SHORT_MONTH_RU[d.getMonth()] ?? '';
+  const dow = SHORT_DOW_RU[d.getDay()] ?? '';
+  const header = `📅 *${String(day).padStart(2, '0')} ${monthLabel}, ${dow}*`;
+
+  if (txs.length === 0) {
+    return `${header}\n\n_Операций нет_`;
+  }
+
+  const SEP = '——————————————';
+  const lines: string[] = [header, SEP];
+
+  let net = 0;
+  for (const tx of txs) {
+    const sign = tx.type === 'expense' ? '−' : '+';
+    const rec = tx.recurrence && tx.recurrence !== 'once' ? ' 🔁' : '';
+    const label = tx.description ?? tx.category;
+    lines.push(`${sign}${formatMoney(tx.amount)} ₽  ${label}${rec}`);
+    net += tx.type === 'income' ? tx.amount : -tx.amount;
+  }
+
+  lines.push(SEP);
+  const netSign = net >= 0 ? '+' : '−';
+  lines.push(`Нетто: *${netSign}${formatMoney(Math.abs(net))} ₽*`);
+
+  return lines.join('\n');
+}
+
+export function prevDateIso(dateIso: string): string {
+  const d = new Date(`${dateIso}T12:00:00`);
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+export function nextDateIso(dateIso: string): string {
+  const d = new Date(`${dateIso}T12:00:00`);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+export function formatNavDate(dateIso: string): string {
+  const d = new Date(`${dateIso}T12:00:00`);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = SHORT_MONTH_RU[d.getMonth()] ?? '';
+  return `${day} ${month}`;
+}

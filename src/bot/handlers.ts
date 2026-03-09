@@ -3,6 +3,7 @@ import { TodoistService } from '../services/todoist';
 import { CalendarService } from '../services/calendar';
 import { BitrixService } from '../services/bitrix';
 import { FinanceService } from '../services/finance';
+import { FitnessService } from '../services/fitness';
 import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '../services/finance-categories';
 import { MessageRouter, TaskDraftIntent } from './router';
 import { LLMClient } from '../llm/client';
@@ -16,7 +17,18 @@ import {
   formatForecast,
   formatTxCard,
   formatRecurrenceLabel,
+  formatDayOpsText,
+  prevDateIso,
+  nextDateIso,
+  formatNavDate,
 } from './finance-formatters';
+import {
+  formatMeasurementHistory,
+  formatNutritionHistory,
+  formatWorkoutHistory,
+  formatParsedExercises,
+  formatProgressionInsight,
+} from './fitness-formatters';
 import { logger } from '../utils/logger';
 import { parseBitrixIds } from '../services/bitrix-link';
 
@@ -87,6 +99,14 @@ const FIN_CANCEL_ALL = '❌ Отмена'
 const FIN_AN_MONTH = '🗓 Месяц'
 const FIN_AN_QUARTER = '🗓 Квартал'
 const FIN_AN_YEAR = '🗓 Год'
+
+// Fitness menu
+const MENU_FITNESS = '💪 Фитнес'
+const FIT_MEASURES = '📏 Замеры'
+const FIT_NUTRITION = '🍎 Питание'
+const FIT_WORKOUT = '🏋️ Тренировка'
+const FIT_PROGRESS = '📊 Прогресс'
+const FIT_BACK = '↩️ Главное меню'
 
 interface PendingFinanceTx {
   amount: number;
@@ -192,6 +212,7 @@ export function setupHandlers(bot: Bot, services: {
 }): void {
   const { todoist, calendar, bitrix } = services;
   const finance = services.finance ?? new FinanceService();
+  const fitness = new FitnessService();
   const llm = new LLMClient();
   const executor = new IntentExecutor(todoist, calendar, bitrix, finance);
   const router = new MessageRouter(llm, executor);
@@ -237,34 +258,42 @@ export function setupHandlers(bot: Bot, services: {
   const pendingFinThreshold = new Set<number>();
   const pendingFinBudget = new Map<number, string>();
 
+  // Fitness state
+  const pendingFitStep = new Map<number, 'workout_input' | 'workout_name'>();
+  const pendingFitWorkoutSession = new Map<number, string>(); // userId → session id
+
+  // Recurring confirmation: adjust flow state
+  const pendingRecurringAdjust = new Map<number, {
+    txId: string;
+    date: string;
+    tx: import('../services/finance').Transaction;
+    messageId: number;
+  }>();
+
   const buildMainMenu = () => new Keyboard()
-    .text(MENU_TASKS_SECTION)
-    .text(MENU_FINANCE)
+    .text(MENU_TASKS_SECTION).text(MENU_FINANCE).row()
+    .text(MENU_FITNESS)
+    .resized()
+    .persistent();
+
+  const buildFitnessMenu = () => new Keyboard()
+    .text(FIT_MEASURES).text(FIT_NUTRITION).row()
+    .text(FIT_WORKOUT).text(FIT_PROGRESS).row()
+    .text(FIT_BACK)
     .resized()
     .persistent();
 
   const buildTasksMenu = () => new Keyboard()
-    .text(MENU_CREATE)
-    .text(MENU_STATUS)
-    .row()
-    .text(MENU_TODAY)
-    .text(MENU_TASKS)
-    .row()
-    .text(MENU_OVERDUE)
-    .text(MENU_REPORT)
-    .row()
-    .text(MENU_SETTINGS)
-    .text(MENU_HELP)
-    .row()
+    .text(MENU_CREATE).text(MENU_STATUS).row()
+    .text(MENU_TODAY).text(MENU_OVERDUE).row()
     .text(MENU_BACK_MAIN)
     .resized()
     .persistent();
 
   const buildFinanceMenu = () => new Keyboard()
     .text(FIN_ADD).text(FIN_SUMMARY).row()
-    .text(FIN_FORECAST_BTN).text(FIN_RECENT_BTN).row()
-    .text(FIN_RECURRING_BTN).text(FIN_ANALYTICS_BTN).row()
-    .text(FIN_SETTINGS_BTN).text(MENU_BACK_MAIN)
+    .text(FIN_RECENT_BTN).text(FIN_FORECAST_BTN).row()
+    .text(MENU_BACK_MAIN)
     .resized();
 
   const buildForecastPeriodMenu = () => new Keyboard()
@@ -478,6 +507,38 @@ export function setupHandlers(bot: Bot, services: {
     } catch (err) {
       logger.error({ err }, 'Error fetching budgets');
       await ctx.reply('Не удалось загрузить бюджеты.', { reply_markup: buildFinanceMenu() });
+    }
+  };
+
+  const getTodayIso = () => new Intl.DateTimeFormat('en-CA', { timeZone: process.env.TIMEZONE || 'Europe/Minsk' }).format(new Date());
+
+  const buildDayOpsView = async (dateIso: string): Promise<{ text: string; keyboard: import('grammy').InlineKeyboard }> => {
+    const [year, month] = dateIso.split('-').map(Number) as [number, number];
+    const allTxs = await finance.getTransactionsWithRecurring(year, month);
+    const dayTxs = allTxs.filter((tx) => tx.date === dateIso);
+    const text = formatDayOpsText(dateIso, dayTxs);
+
+    const todayIso = getTodayIso();
+    const prev = prevDateIso(dateIso);
+    const next = nextDateIso(dateIso);
+    const { InlineKeyboard } = await import('grammy');
+    const kb = new InlineKeyboard()
+      .text(`◀ ${formatNavDate(prev)}`, `ops_day:${prev}`)
+      .text(dateIso === todayIso ? '· сегодня ·' : formatNavDate(dateIso), `ops_day:${dateIso}`)
+      .text(`${formatNavDate(next)} ▶`, `ops_day:${next}`);
+
+    return { text, keyboard: kb };
+  };
+
+  const showDayOperations = async (ctx: Context, dateIso?: string) => {
+    const date = dateIso ?? getTodayIso();
+    await ctx.replyWithChatAction('typing');
+    try {
+      const { text, keyboard } = await buildDayOpsView(date);
+      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+    } catch (err) {
+      logger.error({ err }, 'Error building day operations view');
+      await ctx.reply('Не удалось загрузить операции.', { reply_markup: buildFinanceMenu() });
     }
   };
 
@@ -1053,6 +1114,92 @@ export function setupHandlers(bot: Bot, services: {
     if (text.startsWith('/')) return; // Skip commands
     const normalized = text.trim();
 
+    // ── Fitness text input ────────────────────────────────────────────────
+    // Measurement: "вес 82.5" or "вес 82 живот 89"
+    const measureParsed = FitnessService.parseMeasurement(normalized);
+    if (measureParsed) {
+      try {
+        await fitness.upsertMeasurement(measureParsed);
+        const parts: string[] = ['✅ Замеры записаны'];
+        if (measureParsed.weight_kg !== undefined) parts.push(`⚖️ Вес: *${measureParsed.weight_kg} кг*`);
+        if (measureParsed.waist_cm !== undefined) parts.push(`📏 Живот: *${measureParsed.waist_cm} см*`);
+        await ctx.reply(parts.join('\n'), { parse_mode: 'Markdown' });
+        return;
+      } catch (err) {
+        logger.warn({ err }, 'Failed to save measurement');
+      }
+    }
+
+    // Nutrition: "2200 ккал б180 ж70 у200" or "2200/180/70/200"
+    const nutritionParsed = FitnessService.parseNutrition(normalized);
+    if (nutritionParsed) {
+      try {
+        await fitness.upsertNutrition(nutritionParsed);
+        const parts: string[] = ['✅ Питание записано'];
+        if (nutritionParsed.calories !== undefined) parts.push(`🔥 ${nutritionParsed.calories} ккал`);
+        const macros = [
+          nutritionParsed.protein_g !== undefined ? `Б ${nutritionParsed.protein_g}г` : null,
+          nutritionParsed.fat_g !== undefined ? `Ж ${nutritionParsed.fat_g}г` : null,
+          nutritionParsed.carbs_g !== undefined ? `У ${nutritionParsed.carbs_g}г` : null,
+        ].filter(Boolean).join('  ');
+        if (macros) parts.push(macros);
+        await ctx.reply(parts.join('\n'), { parse_mode: 'Markdown' });
+        return;
+      } catch (err) {
+        logger.warn({ err }, 'Failed to save nutrition');
+      }
+    }
+
+    // Workout: "жим лёжа 70кг 3×8" (only when in workout step)
+    if (pendingFitStep.get(ctx.from.id) === 'workout_input') {
+      const exercises = FitnessService.parseWorkout(normalized);
+      if (exercises.length > 0) {
+        try {
+          let sessionId = pendingFitWorkoutSession.get(ctx.from.id);
+          if (!sessionId) {
+            const session = await fitness.createSession({});
+            sessionId = session.id;
+            pendingFitWorkoutSession.set(ctx.from.id, sessionId);
+          }
+          await fitness.addSets(sessionId, exercises);
+          const preview = formatParsedExercises(exercises);
+          await ctx.reply(
+            `✅ Записано:\n\n${preview}\n\n_Добавь ещё упражнения или вернись в меню_`,
+            { parse_mode: 'Markdown', reply_markup: buildFitnessMenu() },
+          );
+          return;
+        } catch (err) {
+          logger.error({ err }, 'Failed to save workout');
+          await ctx.reply('Ошибка при записи тренировки. Попробуй ещё раз.');
+          return;
+        }
+      }
+    }
+
+    // ── Recurring adjust: waiting for new amount ─────────────────────────
+    if (pendingRecurringAdjust.has(ctx.from.id)) {
+      const adjust = pendingRecurringAdjust.get(ctx.from.id)!;
+      const amount = parseAmountFromText(normalized);
+      if (amount === null || amount <= 0) {
+        await ctx.reply('Введи сумму числом, например: *3500* или *3.5к*', { parse_mode: 'Markdown' });
+        return;
+      }
+      pendingRecurringAdjust.delete(ctx.from.id);
+      try {
+        await finance.confirmOccurrence(adjust.txId, adjust.date, amount, adjust.tx);
+        const label = adjust.tx.description ?? adjust.tx.category;
+        const sign = adjust.tx.type === 'expense' ? '−' : '+';
+        await ctx.reply(
+          `✅ Проведено: ${sign}${formatMoney(amount)} ₽ — ${label}`,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (err) {
+        logger.error({ err }, 'Failed to confirm adjusted recurring');
+        await ctx.reply('Ошибка при записи. Попробуй ещё раз.');
+      }
+      return;
+    }
+
     if (normalized === MENU_TASKS_SECTION) {
       await ctx.reply('📋 *Задачи*\n\nВыбери действие:', {
         parse_mode: 'Markdown',
@@ -1180,6 +1327,137 @@ export function setupHandlers(bot: Bot, services: {
         }
       } catch {
         await showFinanceMenu(ctx);
+      }
+      return;
+    }
+
+    // ── Fitness section ──────────────────────────────────────────────────
+    if (normalized === MENU_FITNESS) {
+      await ctx.reply('💪 *Фитнес*\n\nВыбери раздел:', {
+        parse_mode: 'Markdown',
+        reply_markup: buildFitnessMenu(),
+      });
+      return;
+    }
+
+    if (normalized === FIT_BACK) {
+      pendingFitStep.delete(ctx.from.id);
+      pendingFitWorkoutSession.delete(ctx.from.id);
+      await ctx.reply('Главное меню:', { reply_markup: buildMainMenu() });
+      return;
+    }
+
+    if (normalized === FIT_MEASURES) {
+      pendingFitStep.delete(ctx.from.id);
+      try {
+        const measurements = await fitness.getMeasurements(14);
+        await ctx.reply(formatMeasurementHistory(measurements), {
+          parse_mode: 'Markdown',
+          reply_markup: buildFitnessMenu(),
+        });
+      } catch (err) {
+        logger.error({ err }, 'Error fetching measurements');
+        await ctx.reply('Не удалось загрузить замеры.', { reply_markup: buildFitnessMenu() });
+      }
+      return;
+    }
+
+    if (normalized === FIT_NUTRITION) {
+      pendingFitStep.delete(ctx.from.id);
+      try {
+        const entries = await fitness.getRecentNutrition(7);
+        await ctx.reply(formatNutritionHistory(entries), {
+          parse_mode: 'Markdown',
+          reply_markup: buildFitnessMenu(),
+        });
+      } catch (err) {
+        logger.error({ err }, 'Error fetching nutrition');
+        await ctx.reply('Не удалось загрузить данные питания.', { reply_markup: buildFitnessMenu() });
+      }
+      return;
+    }
+
+    if (normalized === FIT_WORKOUT) {
+      pendingFitStep.set(ctx.from.id, 'workout_input');
+      pendingFitWorkoutSession.delete(ctx.from.id);
+      try {
+        const sessions = await fitness.getRecentSessions(5);
+        const sessionsWithSets = await Promise.all(
+          sessions.map(async (s) => ({ session: s, sets: await fitness.getSessionSets(s.id) })),
+        );
+        const history = formatWorkoutHistory(sessionsWithSets);
+        await ctx.reply(
+          `${history}\n\n——————————————\n_Введи тренировку:_\n\`жим лёжа 70кг 3×8, тяга 100кг 3×6\``,
+          { parse_mode: 'Markdown', reply_markup: buildFitnessMenu() },
+        );
+      } catch (err) {
+        logger.error({ err }, 'Error fetching workout sessions');
+        await ctx.reply(
+          '🏋️ *Тренировка*\n\n_Введи упражнения:_\n`жим лёжа 70кг 3×8`',
+          { parse_mode: 'Markdown', reply_markup: buildFitnessMenu() },
+        );
+      }
+      return;
+    }
+
+    if (normalized === FIT_PROGRESS) {
+      pendingFitStep.delete(ctx.from.id);
+      try {
+        const [measurements, sessions] = await Promise.all([
+          fitness.getMeasurements(30),
+          fitness.getRecentSessions(10),
+        ]);
+
+        const lines: string[] = ['📊 *Прогресс*\n'];
+
+        // Body composition trend
+        if (measurements.length >= 2) {
+          const latest = measurements[0]!;
+          const oldest = measurements[measurements.length - 1]!;
+          lines.push('⚖️ *Тело:*');
+          if (latest.weight_kg !== null && oldest.weight_kg !== null) {
+            const diff = latest.weight_kg - oldest.weight_kg;
+            const sign = diff > 0 ? '+' : '';
+            lines.push(`Вес: ${latest.weight_kg} кг (${sign}${diff.toFixed(1)} кг за период)`);
+          }
+          if (latest.waist_cm !== null && oldest.waist_cm !== null) {
+            const diff = latest.waist_cm - oldest.waist_cm;
+            const sign = diff > 0 ? '+' : '';
+            lines.push(`Живот: ${latest.waist_cm} см (${sign}${diff.toFixed(1)} см за период)`);
+          }
+          lines.push('');
+        }
+
+        // Workout frequency
+        if (sessions.length > 0) {
+          lines.push(`🏋️ *Тренировки:* ${sessions.length} за последний период`);
+
+          // Find most trained exercises
+          const allSets = await Promise.all(sessions.slice(0, 5).map((s) => fitness.getSessionSets(s.id)));
+          const exCount = new Map<string, number>();
+          allSets.flat().forEach((s) => exCount.set(s.exercise, (exCount.get(s.exercise) ?? 0) + 1));
+          const topEx = [...exCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+
+          if (topEx.length > 0) {
+            lines.push('Топ упражнений: ' + topEx.map(([ex]) => ex).join(', '));
+          }
+
+          // Progression check for top exercise
+          if (topEx[0]) {
+            const exName = topEx[0][0];
+            const exHistory = await fitness.getExerciseHistory(exName, 4);
+            const suggestion = fitness.getProgressionSuggestion(exHistory);
+            if (suggestion) {
+              lines.push('');
+              lines.push(`💡 *${exName}:* ${suggestion}`);
+            }
+          }
+        }
+
+        await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown', reply_markup: buildFitnessMenu() });
+      } catch (err) {
+        logger.error({ err }, 'Error building progress view');
+        await ctx.reply('Не удалось загрузить прогресс.', { reply_markup: buildFitnessMenu() });
       }
       return;
     }
@@ -1976,7 +2254,7 @@ export function setupHandlers(bot: Bot, services: {
     }
 
     if (normalized === FIN_RECENT_BTN) {
-      await showRecentTransactions(ctx);
+      await showDayOperations(ctx);
       return;
     }
 
@@ -2331,6 +2609,116 @@ export function setupHandlers(bot: Bot, services: {
       logger.error({ err }, 'Error processing message');
       await ctx.reply('Произошла ошибка. Попробуй ещё раз.');
     }
+  });
+
+  // ── Recurring payment confirmation callbacks ───────────────────────────
+  bot.on('callback_query:data', async (ctx) => {
+    if (!isAuthorized(ctx)) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    const data = ctx.callbackQuery.data;
+
+    // rec_confirm:{txId}:{date}
+    if (data.startsWith('rec_confirm:')) {
+      const [, txId, date] = data.split(':') as [string, string, string];
+      if (!txId || !date) { await ctx.answerCallbackQuery(); return; }
+
+      try {
+        const due = await finance.getRecurringDueOn(date);
+        const tx = due.find((t) => t.id === txId);
+        if (!tx) {
+          await ctx.editMessageText('✅ Платёж уже обработан.');
+          await ctx.answerCallbackQuery();
+          return;
+        }
+
+        await finance.confirmOccurrence(txId, date, tx.amount, tx);
+        const label = tx.description ?? tx.category;
+        await ctx.editMessageText(
+          `✅ Проведено: ${tx.type === 'expense' ? '−' : '+'}${formatMoney(tx.amount)} ₽ — ${label}`,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (err) {
+        logger.error({ err }, 'Failed to confirm recurring occurrence');
+        await ctx.answerCallbackQuery('Ошибка при проведении');
+        return;
+      }
+      await ctx.answerCallbackQuery('Проведено ✅');
+      return;
+    }
+
+    // rec_skip:{txId}:{date}
+    if (data.startsWith('rec_skip:')) {
+      const [, txId, date] = data.split(':') as [string, string, string];
+      if (!txId || !date) { await ctx.answerCallbackQuery(); return; }
+
+      try {
+        await finance.skipOccurrence(txId, date);
+        await ctx.editMessageText('❌ Платёж пропущен на сегодня.', { parse_mode: 'Markdown' });
+      } catch (err) {
+        logger.error({ err }, 'Failed to skip recurring occurrence');
+        await ctx.answerCallbackQuery('Ошибка');
+        return;
+      }
+      await ctx.answerCallbackQuery('Пропущено');
+      return;
+    }
+
+    // rec_adjust:{txId}:{date}
+    if (data.startsWith('rec_adjust:')) {
+      const [, txId, date] = data.split(':') as [string, string, string];
+      if (!txId || !date) { await ctx.answerCallbackQuery(); return; }
+
+      try {
+        const due = await finance.getRecurringDueOn(date);
+        const tx = due.find((t) => t.id === txId);
+        if (!tx) {
+          await ctx.editMessageText('✅ Платёж уже обработан.');
+          await ctx.answerCallbackQuery();
+          return;
+        }
+
+        const label = tx.description ?? tx.category;
+        const msgId = ctx.callbackQuery.message?.message_id;
+        if (msgId) {
+          pendingRecurringAdjust.set(ctx.from.id, { txId, date, tx, messageId: msgId });
+        }
+
+        await ctx.editMessageText(
+          `✏️ Введи новую сумму для *${label}*\n_(по умолчанию ${formatMoney(tx.amount)} ₽)_`,
+          { parse_mode: 'Markdown' },
+        );
+      } catch (err) {
+        logger.error({ err }, 'Failed to start adjust recurring');
+        await ctx.answerCallbackQuery('Ошибка');
+        return;
+      }
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    // ops_day:{date} — navigate to a date in the operations view
+    if (data.startsWith('ops_day:')) {
+      const dateIso = data.slice('ops_day:'.length);
+      if (!dateIso || !/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) {
+        await ctx.answerCallbackQuery();
+        return;
+      }
+      try {
+        const { text, keyboard } = await buildDayOpsView(dateIso);
+        await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+      } catch (err) {
+        logger.error({ err }, 'Error navigating day ops');
+        await ctx.answerCallbackQuery('Ошибка загрузки');
+        return;
+      }
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
   });
 
   logger.info('Bot handlers registered');

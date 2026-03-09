@@ -7,6 +7,7 @@ import { FinanceService } from '../services/finance';
 import { LLMClient } from '../llm/client';
 import { sendMorningBriefing } from './morning';
 import { sendFridayReport } from './friday';
+import { sendRecurringConfirmations } from './recurring-confirm';
 import { checkAndSendReminders, cleanupOldReminders } from './reminders';
 import { syncTodoistCommentsToBitrix } from './comment-sync';
 import { getBriefingTime, getTimezone } from '../config/settings';
@@ -42,6 +43,8 @@ export async function startScheduler(
       } else {
         await sendMorningBriefing(bot, userId, services.todoist, services.calendar, llm, finance);
       }
+      // After briefing: send confirmations for recurring payments due today
+      await sendRecurringConfirmations(bot, userId, finance);
     },
     { timezone }
   );

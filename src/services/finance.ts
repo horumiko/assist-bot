@@ -721,4 +721,93 @@ export class FinanceService {
       periodEnd: horizonIso,
     };
   }
+
+  // ── Recurring confirmations ──────────────────────────────────────────────
+
+  /**
+   * Returns recurring transaction templates that have an occurrence on the given date
+   * and have NOT yet been confirmed or skipped.
+   */
+  async getRecurringDueOn(date: string): Promise<Transaction[]> {
+    const db = getDb();
+    const { data, error } = await db
+      .from('finance_transactions')
+      .select('*')
+      .neq('recurrence', 'once')
+      .lte('date', date)
+      .order('date', { ascending: true });
+
+    if (error) throw new Error(error.message);
+
+    const templates: Transaction[] = (data ?? []).map((row) => ({
+      id: row.id,
+      amount: Number(row.amount),
+      type: row.type,
+      category: row.category,
+      description: row.description ?? undefined,
+      date: row.date,
+      recurrence: row.recurrence,
+      recurrence_end: row.recurrence_end ?? undefined,
+    }));
+
+    const targetDate = new Date(`${date}T00:00:00`);
+    const due: Transaction[] = [];
+
+    for (const tx of templates) {
+      const end = tx.recurrence_end ? new Date(`${tx.recurrence_end}T00:00:00`) : null;
+      if (end && end < targetDate) continue;
+
+      // Walk occurrences until we reach targetDate
+      let cursor = new Date(`${tx.date}T00:00:00`);
+      while (cursor < targetDate) {
+        cursor = nextOccurrence(cursor, tx.recurrence);
+      }
+
+      if (toIsoDate(cursor) === date) {
+        // Check if already handled
+        const handled = await this.isOccurrenceHandled(tx.id, date);
+        if (!handled) due.push(tx);
+      }
+    }
+
+    return due;
+  }
+
+  async isOccurrenceHandled(recurringTxId: string, date: string): Promise<boolean> {
+    const db = getDb();
+    const { data, error } = await db
+      .from('recurring_confirmations')
+      .select('id')
+      .eq('recurring_tx_id', recurringTxId)
+      .eq('date', date)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return !!data;
+  }
+
+  async confirmOccurrence(recurringTxId: string, date: string, amount: number, tx: Pick<Transaction, 'type' | 'category' | 'description'>): Promise<Transaction> {
+    const db = getDb();
+    // Record confirmation
+    await db.from('recurring_confirmations').upsert(
+      { recurring_tx_id: recurringTxId, date, action: 'confirmed', amount },
+      { onConflict: 'recurring_tx_id,date' },
+    );
+    // Add as one-time persisted transaction
+    return this.addTransaction({
+      amount,
+      type: tx.type,
+      category: tx.category,
+      description: tx.description,
+      date,
+      recurrence: 'once',
+    });
+  }
+
+  async skipOccurrence(recurringTxId: string, date: string): Promise<void> {
+    const db = getDb();
+    await db.from('recurring_confirmations').upsert(
+      { recurring_tx_id: recurringTxId, date, action: 'skipped' },
+      { onConflict: 'recurring_tx_id,date' },
+    );
+  }
 }
