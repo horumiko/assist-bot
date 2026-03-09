@@ -7,7 +7,7 @@ import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '../services/finance-categ
 import { MessageRouter, TaskDraftIntent } from './router';
 import { LLMClient } from '../llm/client';
 import { IntentExecutor } from '../llm/executor';
-import { getStatusMappings, addStatusMapping, clearStatusMappings, getConfig } from '../config/settings';
+import { getStatusMappings, addStatusMapping, clearStatusMappings, getConfig, getStatusThresholdHours } from '../config/settings';
 import { formatTaskList, formatEventList } from './formatters';
 import {
   formatMoney,
@@ -773,10 +773,15 @@ export function setupHandlers(bot: Bot, services: {
     return bestScore > 0 ? best : null;
   };
 
-  const buildStatusTaskList = async () => {
+  const buildRootStatusTasks = async () => {
     const tasks = await todoist.getAllActiveTasks();
     const rootTasks = tasks.filter(t => !todoist.getTaskParentId(t));
-    return rootTasks.slice(0, 20).map((t) => ({ id: t.id, content: t.content }));
+    return rootTasks.map((t) => ({ id: t.id, content: t.content }));
+  };
+
+  const buildStatusTaskList = async () => {
+    const rootTasks = await buildRootStatusTasks();
+    return rootTasks.slice(0, 20);
   };
 
   const getStatusColumnOptions = async (taskId: string) => {
@@ -1081,15 +1086,29 @@ export function setupHandlers(bot: Bot, services: {
       pendingTaskSectionList.delete(ctx.from.id);
       pendingTaskStep.delete(ctx.from.id);
       try {
-        const taskList = await buildStatusTaskList();
+        const [rootTaskList, thresholdHours] = await Promise.all([
+          buildRootStatusTasks(),
+          getStatusThresholdHours(),
+        ]);
+        const taskList = rootTaskList.slice(0, 20);
         if (taskList.length === 0) {
           await ctx.reply('Нет активных задач для обновления статуса.', { reply_markup: buildTasksMenu() });
           return;
         }
 
+        const staleTaskIds = await todoist.getStaleTaskIds(thresholdHours);
+        const staleTasks = rootTaskList.filter((t) => staleTaskIds.includes(t.id));
+
         pendingTaskStep.set(ctx.from.id, 'status_task_pick');
         pendingStatusTaskList.set(ctx.from.id, taskList);
         const lines = ['Выбери задачу, для которой хочешь дать статус:'];
+        if (staleTasks.length > 0) {
+          lines.unshift(`⚠️ Ждут апдейта больше ${thresholdHours}ч: ${staleTasks.length}`);
+          staleTasks.slice(0, 5).forEach((task, i) => {
+            const label = task.content.length > 72 ? `${task.content.slice(0, 69)}...` : task.content;
+            lines.splice(1 + i, 0, `• ${label}`);
+          });
+        }
         taskList.forEach((task, i) => {
           const label = task.content.length > 72 ? `${task.content.slice(0, 69)}...` : task.content;
           lines.push(`${i + 1}. ${label}`);
