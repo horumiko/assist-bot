@@ -258,6 +258,9 @@ export function setupHandlers(bot: Bot, services: {
   const pendingFinThreshold = new Set<number>();
   const pendingFinBudget = new Map<number, string>();
 
+  // Current section per user
+  const userSection = new Map<number, 'tasks' | 'finance' | 'fitness'>();
+
   // Fitness state
   const pendingFitStep = new Map<number, 'workout_input' | 'workout_name'>();
   const pendingFitWorkoutSession = new Map<number, string>(); // userId → session id
@@ -1201,6 +1204,7 @@ export function setupHandlers(bot: Bot, services: {
     }
 
     if (normalized === MENU_TASKS_SECTION) {
+      userSection.set(ctx.from.id, 'tasks');
       await ctx.reply('📋 *Задачи*\n\nВыбери действие:', {
         parse_mode: 'Markdown',
         reply_markup: buildTasksMenu(),
@@ -1209,6 +1213,7 @@ export function setupHandlers(bot: Bot, services: {
     }
 
     if (normalized === MENU_BACK_MAIN) {
+      userSection.delete(ctx.from.id);
       await ctx.reply('Главное меню:', { reply_markup: buildMainMenu() });
       return;
     }
@@ -1318,6 +1323,7 @@ export function setupHandlers(bot: Bot, services: {
     }
 
     if (normalized === MENU_FINANCE) {
+      userSection.set(ctx.from.id, 'finance');
       try {
         const onboardingDone = await finance.isOnboardingDone();
         if (!onboardingDone) {
@@ -1333,6 +1339,7 @@ export function setupHandlers(bot: Bot, services: {
 
     // ── Fitness section ──────────────────────────────────────────────────
     if (normalized === MENU_FITNESS) {
+      userSection.set(ctx.from.id, 'fitness');
       await ctx.reply('💪 *Фитнес*\n\nВыбери раздел:', {
         parse_mode: 'Markdown',
         reply_markup: buildFitnessMenu(),
@@ -1341,6 +1348,7 @@ export function setupHandlers(bot: Bot, services: {
     }
 
     if (normalized === FIT_BACK) {
+      userSection.delete(ctx.from.id);
       pendingFitStep.delete(ctx.from.id);
       pendingFitWorkoutSession.delete(ctx.from.id);
       await ctx.reply('Главное меню:', { reply_markup: buildMainMenu() });
@@ -2542,7 +2550,29 @@ export function setupHandlers(bot: Bot, services: {
         return;
       }
 
-      if (looksLikeFinanceAddIntent(normalized)) {
+      const section = userSection.get(ctx.from.id);
+
+      // "Баланс 296.17" → set initial balance directly (works in any section)
+      const balanceSet = /^баланс\s+([\d.,\s]+)/i.exec(normalized);
+      if (balanceSet) {
+        const amount = parseAmountFromText(balanceSet[1].trim());
+        if (amount !== null) {
+          try {
+            await finance.setInitialBalance(amount);
+            await ctx.reply(
+              `✅ Баланс обновлён: *${formatMoney(amount)} ₽*`,
+              { parse_mode: 'Markdown', reply_markup: buildFinanceMenu() },
+            );
+          } catch (err) {
+            logger.error({ err }, 'Error setting initial balance via text');
+            await ctx.reply('Не удалось сохранить баланс. Финансовый API недоступен.');
+          }
+          return;
+        }
+      }
+
+      // Finance section: always try to parse as transaction
+      if (section === 'finance' || looksLikeFinanceAddIntent(normalized)) {
         const txList = await parseFinanceDraftsFromText(normalized);
         if (txList.length > 0) {
           if (txList.length === 1) {
@@ -2567,6 +2597,20 @@ export function setupHandlers(bot: Bot, services: {
           }
           return;
         }
+        if (section === 'finance') {
+          // In finance section but nothing recognized → hint, don't fall to task router
+          await ctx.reply(
+            'Не понял операцию. Напиши, например:\n• "потратил 500 на продукты"\n• "зп 60к"\n• "аренда 35000 каждый месяц"',
+            { reply_markup: buildFinanceMenu() },
+          );
+          return;
+        }
+      }
+
+      // Fitness section: text input not expected, just nudge
+      if (section === 'fitness') {
+        await ctx.reply('Используй кнопки меню для работы с фитнесом.', { reply_markup: buildFitnessMenu() });
+        return;
       }
 
       const explicitCreate = /созда(й|ть|йте)|добав(ь|ить|ьте)|постав(ь|ить|ьте)|нов(ая|ую)\s+задач|задача\s*:/i.test(normalized);

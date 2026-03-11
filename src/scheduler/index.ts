@@ -9,7 +9,7 @@ import { sendMorningBriefing } from './morning';
 import { sendFridayReport } from './friday';
 import { sendRecurringConfirmations } from './recurring-confirm';
 import { checkAndSendReminders, cleanupOldReminders } from './reminders';
-import { syncTodoistCommentsToBitrix } from './comment-sync';
+import { sendWeeklyBitrixSummary } from './comment-sync';
 import { getBriefingTime, getTimezone } from '../config/settings';
 import { formatMoney, formatFinanceSummary } from '../bot/finance-formatters';
 import { logger } from '../utils/logger';
@@ -43,7 +43,14 @@ export async function startScheduler(
       } else {
         await sendMorningBriefing(bot, userId, services.todoist, services.calendar, llm, finance);
       }
-      // After briefing: send confirmations for recurring payments due today
+    },
+    { timezone }
+  );
+
+  // Recurring payment confirmations at 20:00
+  cron.schedule(
+    '0 20 * * *',
+    async () => {
       await sendRecurringConfirmations(bot, userId, finance);
     },
     { timezone }
@@ -69,11 +76,11 @@ export async function startScheduler(
     { timezone }
   );
 
-  // Sync Todoist comments to Bitrix once per hour
+  // Weekly Bitrix summary: Monday at 17:00 Minsk time
   cron.schedule(
-    '0 * * * *',
+    '0 17 * * 1',
     async () => {
-      await syncTodoistCommentsToBitrix(services.todoist, services.bitrix);
+      await sendWeeklyBitrixSummary(services.todoist, services.bitrix, llm);
     },
     { timezone }
   );

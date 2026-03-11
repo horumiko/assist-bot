@@ -1,59 +1,47 @@
 import { TodoistService } from '../services/todoist';
 import { BitrixService } from '../services/bitrix';
+import { LLMClient } from '../llm/client';
 import { parseBitrixIds } from '../services/bitrix-link';
-import { getConfig, setConfig, getTimezone } from '../config/settings';
 import { logger } from '../utils/logger';
 
-function toShortDate(iso: string, timeZone: string): string {
-  return new Date(iso).toLocaleDateString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    timeZone,
-  });
+async function summarizeComments(llm: LLMClient, taskName: string, comments: string[]): Promise<string> {
+  const commentBlock = comments.join('\n---\n');
+  return llm.summarizeText(
+    `Составь краткое резюме рабочих обновлений по задаче "${taskName}" на основе комментариев за прошедшую неделю. ` +
+    `Пиши по-русски, кратко, по делу — что было сделано, какой статус, какие проблемы если есть.\n\n${commentBlock}`,
+  );
 }
 
-function formatSyncedComment(commentText: string, postedAt: string, timeZone: string): string {
-  return `${toShortDate(postedAt, timeZone)}\n${commentText.trim()}`;
-}
-
-function taskSyncKey(taskId: string): string {
-  return `todoist_comment_sync_last_${taskId}`;
-}
-
-export async function syncTodoistCommentsToBitrix(
+export async function sendWeeklyBitrixSummary(
   todoist: TodoistService,
   bitrix: BitrixService,
+  llm: LLMClient,
 ): Promise<void> {
-  const timezone = getTimezone();
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
   const tasks = await todoist.getAllActiveTasks();
-  const linkedTasks = tasks.filter((t) => todoist.hasBitrixLabel(t) && parseBitrixIds(t.description ?? '').length > 0);
+  const linkedTasks = tasks.filter(
+    (t) => todoist.hasBitrixLabel(t) && parseBitrixIds(t.description ?? '').length > 0,
+  );
 
   for (const task of linkedTasks) {
     const bitrixIds = parseBitrixIds(task.description ?? '');
     if (bitrixIds.length === 0) continue;
 
-    const key = taskSyncKey(task.id);
-    const lastSynced = await getConfig(key);
-
-    let latestSeen = lastSynced ?? null;
-
     try {
-      const comments = await todoist.listTaskComments(task.id, lastSynced ?? undefined);
+      const comments = await todoist.listTaskComments(task.id, weekAgo);
+      if (comments.length === 0) continue;
 
-      for (const comment of comments) {
-        const text = comment.content.trim();
-        if (!text) continue;
+      const commentTexts = comments.map((c) => c.content.trim()).filter(Boolean);
+      if (commentTexts.length === 0) continue;
 
-        const message = formatSyncedComment(text, comment.postedAt, timezone);
-        await Promise.allSettled(bitrixIds.map((id) => bitrix.addComment(id, message)));
-        latestSeen = comment.postedAt;
-      }
+      const summary = await summarizeComments(llm, task.content, commentTexts);
+      const message = `📋 Недельное резюме\n${summary}`;
 
-      if (latestSeen && latestSeen !== lastSynced) {
-        await setConfig(key, latestSeen);
-      }
+      await Promise.allSettled(bitrixIds.map((id) => bitrix.addComment(id, message)));
+      logger.info({ taskId: task.id, bitrixIds, commentCount: comments.length }, 'Weekly Bitrix summary sent');
     } catch (err) {
-      logger.warn({ err, taskId: task.id, bitrixIds }, 'Failed to sync Todoist comments to Bitrix for task');
+      logger.warn({ err, taskId: task.id }, 'Failed to send weekly Bitrix summary for task');
     }
   }
 }

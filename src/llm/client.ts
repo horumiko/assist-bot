@@ -258,6 +258,18 @@ export class LLMClient {
     });
   }
 
+  async summarizeText(prompt: string): Promise<string> {
+    const response = await this.requestChat([
+      { role: 'user', content: prompt },
+    ], {
+      useTools: false,
+      model: this.analysisModel,
+      maxTokens: 400,
+      temperature: 0.3,
+    });
+    return response.content ?? '';
+  }
+
   async generateBriefingSummary(context: string): Promise<string> {
     const response = await this.requestChat([
       { role: 'user', content: `Составь краткую вводную для утреннего брифинга на основе данных:\n\n${context}` },

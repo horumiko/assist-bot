@@ -44,9 +44,9 @@ const INCOME_CATEGORY_MAP: Record<IncomeCategory, string> = {
 
 export function toApiCategory(category: string, type: 'income' | 'expense'): string {
   if (type === 'expense') {
-    return EXPENSE_CATEGORY_MAP[category as ExpenseCategory] ?? 'Другое';
+    return EXPENSE_CATEGORY_MAP[category as ExpenseCategory] ?? category;
   }
-  return INCOME_CATEGORY_MAP[category as IncomeCategory] ?? 'Иное';
+  return INCOME_CATEGORY_MAP[category as IncomeCategory] ?? category;
 }
 
 export function getAllCategories(type: 'income' | 'expense'): readonly string[] {

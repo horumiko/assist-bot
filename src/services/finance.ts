@@ -298,7 +298,7 @@ export class FinanceService {
 
     const mergedMap = new Map<string, Transaction>();
     for (const tx of [...base, ...projected]) {
-      const key = `${tx.type}|${tx.category}|${tx.amount}|${tx.date}|${tx.description ?? ''}|${tx.recurrence}`;
+      const key = `${tx.type}|${tx.category}|${tx.amount}|${tx.date}|${tx.description ?? ''}`;
       if (!mergedMap.has(key)) mergedMap.set(key, tx);
     }
 
