@@ -234,6 +234,8 @@ const SHORT_DOW_RU = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 export function formatDayOpsText(
   dateIso: string,
   txs: Array<{ amount: number; type: 'income' | 'expense'; category: string; description?: string; recurrence?: string }>,
+  startBalance: number,
+  endBalance: number,
 ): string {
   const d = new Date(`${dateIso}T12:00:00`);
   const day = d.getDate();
@@ -241,25 +243,27 @@ export function formatDayOpsText(
   const dow = SHORT_DOW_RU[d.getDay()] ?? '';
   const header = `📅 *${String(day).padStart(2, '0')} ${monthLabel}, ${dow}*`;
 
-  if (txs.length === 0) {
-    return `${header}\n\n_Операций нет_`;
-  }
-
   const SEP = '——————————————';
   const lines: string[] = [header, SEP];
+  lines.push(`🌅 Начало дня: *${formatMoney(startBalance)} ₽*`);
 
-  let net = 0;
+  if (txs.length === 0) {
+    lines.push(SEP);
+    lines.push(`🌙 Конец дня: *${formatMoney(endBalance)} ₽*`);
+    lines.push('\n_Операций нет_');
+    return lines.join('\n');
+  }
+
+  lines.push('');
   for (const tx of txs) {
     const sign = tx.type === 'expense' ? '−' : '+';
     const rec = tx.recurrence && tx.recurrence !== 'once' ? ' 🔁' : '';
     const label = tx.description ?? tx.category;
     lines.push(`${sign}${formatMoney(tx.amount)} ₽  ${label}${rec}`);
-    net += tx.type === 'income' ? tx.amount : -tx.amount;
   }
 
   lines.push(SEP);
-  const netSign = net >= 0 ? '+' : '−';
-  lines.push(`Нетто: *${netSign}${formatMoney(Math.abs(net))} ₽*`);
+  lines.push(`🌙 Конец дня: *${formatMoney(endBalance)} ₽*`);
 
   return lines.join('\n');
 }

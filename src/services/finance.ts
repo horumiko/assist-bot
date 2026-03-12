@@ -452,6 +452,19 @@ export class FinanceService {
     await this._setSetting('initial_balance', String(value));
   }
 
+  async getBalanceAtEndOfDay(dateIso: string): Promise<number> {
+    const db = getDb();
+    const initialBalance = await this.getInitialBalance() ?? 0;
+    const { data, error } = await db
+      .from('finance_transactions')
+      .select('amount, type')
+      .lte('date', dateIso);
+    if (error) throw new Error(error.message);
+    return (data ?? []).reduce((acc, tx) => {
+      return tx.type === 'income' ? acc + Number(tx.amount) : acc - Number(tx.amount);
+    }, initialBalance);
+  }
+
   async setCurrentBalance(value: number, asOfDate?: string): Promise<void> {
     const db = getDb();
     const cutoff = asOfDate ?? getTodayIsoInTimezone();

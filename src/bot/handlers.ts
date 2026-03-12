@@ -519,7 +519,12 @@ export function setupHandlers(bot: Bot, services: {
     const [year, month] = dateIso.split('-').map(Number) as [number, number];
     const allTxs = await finance.getTransactionsWithRecurring(year, month);
     const dayTxs = allTxs.filter((tx) => tx.date === dateIso);
-    const text = formatDayOpsText(dateIso, dayTxs);
+    const prevDay = prevDateIso(dateIso);
+    const [startBalance, endBalance] = await Promise.all([
+      finance.getBalanceAtEndOfDay(prevDay),
+      finance.getBalanceAtEndOfDay(dateIso),
+    ]);
+    const text = formatDayOpsText(dateIso, dayTxs, startBalance, endBalance);
 
     const todayIso = getTodayIso();
     const prev = prevDateIso(dateIso);
