@@ -527,11 +527,10 @@ export function setupHandlers(bot: Bot, services: {
     const text = formatDayOpsText(dateIso, dayTxs, startBalance, endBalance);
 
     const todayIso = getTodayIso();
-    const prev = prevDateIso(dateIso);
     const next = nextDateIso(dateIso);
     const { InlineKeyboard } = await import('grammy');
     const kb = new InlineKeyboard()
-      .text(`◀ ${formatNavDate(prev)}`, `ops_day:${prev}`)
+      .text(`◀ ${formatNavDate(prevDay)}`, `ops_day:${prevDay}`)
       .text(dateIso === todayIso ? '· сегодня ·' : formatNavDate(dateIso), `ops_day:${dateIso}`)
       .text(`${formatNavDate(next)} ▶`, `ops_day:${next}`);
 
