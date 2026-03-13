@@ -519,6 +519,7 @@ export function setupHandlers(bot: Bot, services: {
     const [year, month] = dateIso.split('-').map(Number) as [number, number];
     const allTxs = await finance.getTransactionsWithRecurring(year, month);
     const dayTxs = allTxs.filter((tx) => tx.date === dateIso);
+    const prevDay = prevDateIso(dateIso);
     const startBalance = await finance.getBalanceBeforeDate(dateIso);
     const dayNet = dayTxs.reduce((s, tx) => s + (tx.type === 'income' ? tx.amount : -tx.amount), 0);
     const endBalance = startBalance + dayNet;
