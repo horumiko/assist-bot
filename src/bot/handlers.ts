@@ -943,13 +943,16 @@ export function setupHandlers(bot: Bot, services: {
 
   const sendReport = async (ctx: Context) => {
     await ctx.replyWithChatAction('typing');
-    const { generateReport } = await import('../scheduler/friday');
+    const { generateReport, splitMessage } = await import('../scheduler/friday');
     const report = await generateReport(todoist, calendar, llm, finance);
-    await ctx.reply(report, {
-      parse_mode: 'Markdown',
-      link_preview_options: { is_disabled: true },
-      reply_markup: buildTasksMenu(),
-    });
+    const chunks = splitMessage(report);
+    for (let i = 0; i < chunks.length; i++) {
+      await ctx.reply(chunks[i], {
+        parse_mode: 'Markdown',
+        link_preview_options: { is_disabled: true },
+        reply_markup: i === chunks.length - 1 ? buildTasksMenu() : undefined,
+      });
+    }
   };
 
   const sendSettings = async (ctx: Context) => {

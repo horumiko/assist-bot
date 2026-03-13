@@ -10,6 +10,32 @@ import { logger } from '../utils/logger';
 type AnalysisPeriod = 'month' | 'quarter' | 'year';
 type AnalysisScope = 'tasks' | 'finance' | 'combined';
 
+/** Convert CommonMark from LLM to Telegram Markdown */
+function sanitizeLlmText(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+(.+)$/gm, '*$1*')   // ### Heading → *Heading*
+    .replace(/\*\*(.+?)\*\*/gs, '*$1*')       // **bold** → *bold*
+    .replace(/^\*\s{0,3}(?=\S)/gm, '• ')      // *   item → • item
+    .replace(/^-\s(?=\S)/gm, '• ');           // - item → • item
+}
+
+/** Split text into chunks ≤ maxLen at newline boundaries */
+export function splitMessage(text: string, maxLen = 4000): string[] {
+  if (text.length <= maxLen) return [text];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = start + maxLen;
+    if (end < text.length) {
+      const nl = text.lastIndexOf('\n', end);
+      if (nl > start) end = nl;
+    }
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
 function getPeriodConfig(period: AnalysisPeriod): { months: number; label: string } {
   if (period === 'month') return { months: 1, label: 'месяц' };
   if (period === 'quarter') return { months: 3, label: 'квартал' };
@@ -136,7 +162,7 @@ export async function generateStrategicAnalysis(
   try {
     const analysis = await llm.generateFridayReport(contextParts.join('. '), label, scope);
     if (analysis) {
-      parts.push(`\n🧠 *Выводы и план:*\n${analysis}`);
+      parts.push(`\n🧠 *Выводы и план:*\n${sanitizeLlmText(analysis)}`);
     }
   } catch (err) {
     logger.warn({ err, period }, 'Failed to generate strategic LLM analysis');
@@ -279,7 +305,7 @@ export async function generateReport(
   try {
     const analysis = await llm.generateFridayReport(contextText, 'неделя');
     if (analysis) {
-      parts.push(`\n🤖 *Анализ недели:*\n${analysis}`);
+      parts.push(`\n🤖 *Анализ недели:*\n${sanitizeLlmText(analysis)}`);
     }
   } catch (err) {
     logger.warn({ err }, 'Failed to generate LLM friday analysis');
@@ -300,10 +326,13 @@ export async function sendFridayReport(
 
   try {
     const report = await generateReport(todoist, calendar, llm, finance);
-    await bot.api.sendMessage(userId, report, {
-      parse_mode: 'Markdown',
-      link_preview_options: { is_disabled: true },
-    });
+    const chunks = splitMessage(report);
+    for (const chunk of chunks) {
+      await bot.api.sendMessage(userId, chunk, {
+        parse_mode: 'Markdown',
+        link_preview_options: { is_disabled: true },
+      });
+    }
     logger.info('Friday report sent');
   } catch (err) {
     logger.error({ err }, 'Failed to send friday report');
