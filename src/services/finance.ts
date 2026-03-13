@@ -465,6 +465,62 @@ export class FinanceService {
     }, initialBalance);
   }
 
+  /**
+   * Balance before a given date, including projected recurring occurrences
+   * (not yet confirmed/persisted). Use this for the "start of day" balance
+   * so it stays consistent with the previous day's displayed end balance.
+   */
+  async getBalanceBeforeDate(dateIso: string): Promise<number> {
+    const db = getDb();
+    const initialBalance = await this.getInitialBalance() ?? 0;
+
+    // All persisted transactions strictly before dateIso
+    const { data: persistedData, error } = await db
+      .from('finance_transactions')
+      .select('id, amount, type, category, description, date, recurrence, recurrence_end')
+      .lt('date', dateIso);
+    if (error) throw new Error(error.message);
+
+    const persisted: Transaction[] = (persistedData ?? []).map((row) => ({
+      id: row.id,
+      amount: Number(row.amount),
+      type: row.type,
+      category: row.category,
+      description: row.description ?? undefined,
+      date: row.date,
+      recurrence: row.recurrence,
+      recurrence_end: row.recurrence_end ?? undefined,
+    }));
+
+    // Project recurring occurrences between template date and dateIso (exclusive)
+    const recurringTemplates = persisted.filter((tx) => tx.recurrence !== 'once');
+    const targetDate = new Date(`${dateIso}T00:00:00`);
+    const projected: Transaction[] = [];
+
+    for (const tx of recurringTemplates) {
+      const end = tx.recurrence_end ? new Date(`${tx.recurrence_end}T00:00:00`) : null;
+      let cursor = nextOccurrence(new Date(`${tx.date}T00:00:00`), tx.recurrence);
+      while (cursor < targetDate) {
+        if (!end || cursor <= end) {
+          projected.push({ ...tx, id: `${tx.id}:${toIsoDate(cursor)}`, date: toIsoDate(cursor) });
+        }
+        cursor = nextOccurrence(cursor, tx.recurrence);
+      }
+    }
+
+    // Merge persisted + projected, dedup by content key (same logic as getTransactionsWithRecurring)
+    const mergedMap = new Map<string, Transaction>();
+    for (const tx of [...persisted, ...projected]) {
+      const key = `${tx.type}|${tx.category}|${tx.amount}|${tx.date}|${tx.description ?? ''}`;
+      if (!mergedMap.has(key)) mergedMap.set(key, tx);
+    }
+
+    return Array.from(mergedMap.values()).reduce(
+      (s, tx) => s + (tx.type === 'income' ? tx.amount : -tx.amount),
+      initialBalance,
+    );
+  }
+
   async setCurrentBalance(value: number, asOfDate?: string): Promise<void> {
     const db = getDb();
     const cutoff = asOfDate ?? getTodayIsoInTimezone();
