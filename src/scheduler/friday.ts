@@ -3,7 +3,7 @@ import { TodoistService } from '../services/todoist';
 import { CalendarService } from '../services/calendar';
 import { FinanceService } from '../services/finance';
 import { LLMClient } from '../llm/client';
-import { formatTaskList, formatDueDate } from '../bot/formatters';
+import { formatDueDate } from '../bot/formatters';
 import { formatMoney } from '../bot/finance-formatters';
 import { logger } from '../utils/logger';
 
@@ -158,7 +158,10 @@ export async function generateReport(
     todoist.getAllActiveTasks(),
     todoist.getOverdueTasks(),
     todoist.getCompletedTasksSince(weekAgo),
-    calendar.getWeekEvents(),
+    calendar.getWeekEvents().catch((err) => {
+      logger.warn({ err }, 'Failed to fetch calendar events for friday report');
+      return [];
+    }),
   ]);
 
   const parts: string[] = [];

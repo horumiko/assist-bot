@@ -944,7 +944,7 @@ export function setupHandlers(bot: Bot, services: {
   const sendReport = async (ctx: Context) => {
     await ctx.replyWithChatAction('typing');
     const { generateReport } = await import('../scheduler/friday');
-    const report = await generateReport(todoist, calendar, llm);
+    const report = await generateReport(todoist, calendar, llm, finance);
     await ctx.reply(report, {
       parse_mode: 'Markdown',
       link_preview_options: { is_disabled: true },
