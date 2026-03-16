@@ -881,35 +881,45 @@ export function setupHandlers(bot: Bot, services: {
 
   const sendToday = async (ctx: Context) => {
     await ctx.replyWithChatAction('typing');
-    const [tasks, events] = await Promise.all([
-      todoist.getAllActiveTasks(),
-      calendar.getTodayEvents(),
-    ]);
-    const projectNames = await todoist.getProjectNamesMapForTasks(tasks);
+    try {
+      const [tasks, events] = await Promise.all([
+        todoist.getAllActiveTasks(),
+        calendar.getTodayEvents().catch((err) => {
+          logger.warn({ err }, 'Failed to fetch calendar events for today view');
+          return [];
+        }),
+      ]);
+      const projectNames = await todoist.getProjectNamesMapForTasks(tasks);
 
-    const parts: string[] = [];
-    const today = new Date().toLocaleDateString('ru-RU', {
-      weekday: 'long', day: 'numeric', month: 'long',
-      timeZone: process.env.TIMEZONE || 'Europe/Minsk',
-    });
-    parts.push(`*План на ${today}*\n`);
+      const parts: string[] = [];
+      const today = new Date().toLocaleDateString('ru-RU', {
+        weekday: 'long', day: 'numeric', month: 'long',
+        timeZone: process.env.TIMEZONE || 'Europe/Minsk',
+      });
+      parts.push(`*План на ${today}*\n`);
 
-    if (events.length > 0) {
-      parts.push(formatEventList(events));
-    } else {
-      parts.push('_Событий нет_');
+      if (events.length > 0) {
+        parts.push(formatEventList(events));
+      } else {
+        parts.push('_Событий нет_');
+      }
+
+      if (tasks.length > 0) {
+        parts.push(formatTaskList(tasks, 'Активные задачи', projectNames));
+      } else {
+        parts.push('_Активных задач нет_');
+      }
+
+      await ctx.reply(parts.join('\n\n'), {
+        parse_mode: 'Markdown',
+        reply_markup: buildTasksMenu(),
+      });
+    } catch (err) {
+      logger.error({ err }, 'Failed to build today view');
+      await ctx.reply('Не удалось сформировать план на сегодня. Попробуй чуть позже.', {
+        reply_markup: buildTasksMenu(),
+      });
     }
-
-    if (tasks.length > 0) {
-      parts.push(formatTaskList(tasks, 'Активные задачи', projectNames));
-    } else {
-      parts.push('_Активных задач нет_');
-    }
-
-    await ctx.reply(parts.join('\n\n'), {
-      parse_mode: 'Markdown',
-      reply_markup: buildTasksMenu(),
-    });
   };
 
   const sendTasks = async (ctx: Context) => {
