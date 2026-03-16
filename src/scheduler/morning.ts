@@ -11,6 +11,15 @@ import { logger } from '../utils/logger';
 const TZ = process.env.TIMEZONE || 'Europe/Minsk';
 const SEP = '——————————————';
 
+function toPlainText(message: string): string {
+  return message
+    // [text](url) -> text (url)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    // remove simple markdown markers used in reports
+    .replace(/([*_`])/g, '')
+    .trim();
+}
+
 function getTodayIso(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
 }
@@ -28,7 +37,10 @@ export async function sendMorningBriefing(
   try {
     const [allTasks, events, overdueTasks] = await Promise.all([
       todoist.getAllActiveTasks(),
-      calendar.getTodayEvents(),
+      calendar.getTodayEvents().catch((err) => {
+        logger.warn({ err }, 'Failed to fetch calendar events for morning briefing');
+        return [];
+      }),
       todoist.getOverdueTasks(),
     ]);
 
@@ -135,10 +147,18 @@ export async function sendMorningBriefing(
       }
     }
 
-    await bot.api.sendMessage(userId, body + llmSuffix, {
-      parse_mode: 'Markdown',
-      link_preview_options: { is_disabled: true },
-    });
+    const message = body + llmSuffix;
+    try {
+      await bot.api.sendMessage(userId, message, {
+        parse_mode: 'Markdown',
+        link_preview_options: { is_disabled: true },
+      });
+    } catch (err) {
+      logger.warn({ err }, 'Morning briefing Markdown delivery failed, retrying as plain text');
+      await bot.api.sendMessage(userId, toPlainText(message), {
+        link_preview_options: { is_disabled: true },
+      });
+    }
 
     logger.info('Morning briefing sent');
   } catch (err) {
