@@ -10,6 +10,7 @@ import { logger } from '../utils/logger';
 
 const TZ = process.env.TIMEZONE || 'Europe/Minsk';
 const SEP = '——————————————';
+const STATUS_EXCLUDED_SECTIONS = new Set(['backlog', 'todo', 'me']);
 
 function toPlainText(message: string): string {
   return message
@@ -18,6 +19,10 @@ function toPlainText(message: string): string {
     // remove simple markdown markers used in reports
     .replace(/([*_`])/g, '')
     .trim();
+}
+
+function normalizeSectionName(name: string): string {
+  return name.toLowerCase().replace(/[\s_\-]+/g, ' ').trim().replace(/\s+/g, '');
 }
 
 function getTodayIso(): string {
@@ -46,7 +51,15 @@ export async function sendMorningBriefing(
 
     const thresholdHours = await getStatusThresholdHours();
     const staleTaskIds = await todoist.getStaleTaskIds(thresholdHours);
-    const staleTasks = allTasks.filter((t) => staleTaskIds.includes(t.id));
+    const sectionNamesById = await todoist.getSectionNamesMapForTasks(allTasks);
+    const staleTasks = allTasks.filter((t) => {
+      if (!staleTaskIds.includes(t.id)) return false;
+      const sectionId = todoist.getTaskSectionId(t);
+      if (!sectionId) return true;
+      const sectionName = sectionNamesById[sectionId];
+      if (!sectionName) return true;
+      return !STATUS_EXCLUDED_SECTIONS.has(normalizeSectionName(sectionName));
+    });
     const overdueIds = new Set(overdueTasks.map((t) => t.id));
     const activeTasks = allTasks.filter((t) => !overdueIds.has(t.id));
 

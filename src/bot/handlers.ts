@@ -107,6 +107,7 @@ const FIT_NUTRITION = '🍎 Питание'
 const FIT_WORKOUT = '🏋️ Тренировка'
 const FIT_PROGRESS = '📊 Прогресс'
 const FIT_BACK = '↩️ Главное меню'
+const STATUS_EXCLUDED_SECTIONS = new Set(['backlog', 'todo', 'me']);
 
 interface PendingFinanceTx {
   amount: number;
@@ -842,7 +843,15 @@ export function setupHandlers(bot: Bot, services: {
 
   const buildRootStatusTasks = async () => {
     const tasks = await todoist.getAllActiveTasks();
-    const rootTasks = tasks.filter(t => !todoist.getTaskParentId(t));
+    const sectionNamesById = await todoist.getSectionNamesMapForTasks(tasks);
+    const rootTasks = tasks.filter((t) => {
+      if (todoist.getTaskParentId(t)) return false;
+      const sectionId = todoist.getTaskSectionId(t);
+      if (!sectionId) return true;
+      const sectionName = sectionNamesById[sectionId];
+      if (!sectionName) return true;
+      return !STATUS_EXCLUDED_SECTIONS.has(sectionNameCanonical(sectionName));
+    });
     return rootTasks.map((t) => ({ id: t.id, content: t.content }));
   };
 

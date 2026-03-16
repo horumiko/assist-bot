@@ -275,6 +275,35 @@ export class TodoistService {
     }
   }
 
+  async getSectionNamesMapForTasks(tasks: Task[]): Promise<Record<string, string>> {
+    const projectIds = Array.from(new Set(
+      tasks
+        .map((task) => this.getTaskProjectId(task))
+        .filter((id) => Boolean(id) && id !== 'unknown'),
+    ));
+    if (projectIds.length === 0) return {};
+
+    const map: Record<string, string> = {};
+    const sectionGroups = await Promise.all(
+      projectIds.map(async (projectId) => {
+        try {
+          return await this.listSections(projectId);
+        } catch (err) {
+          logger.warn({ err, projectId }, 'Failed to fetch Todoist sections for project');
+          return [];
+        }
+      }),
+    );
+
+    for (const sections of sectionGroups) {
+      for (const section of sections) {
+        map[section.id] = section.name;
+      }
+    }
+
+    return map;
+  }
+
   async getAllActiveTasks(): Promise<Task[]> {
     try {
       const tasks = await this.getPaginatedTasks('/tasks');
