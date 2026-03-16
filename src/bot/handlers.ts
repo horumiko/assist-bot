@@ -708,8 +708,9 @@ export function setupHandlers(bot: Bot, services: {
 
   const inferStatusFromText = (text: string): string | null => {
     const t = text.toLowerCase();
-    if (/готов|сделан|выполн|закрыт|заверш/.test(t)) return 'completed';
-    if (/чисто|done|completed/.test(t)) return 'completed';
+    if (/\b(done|completed)\b/.test(t)) return 'completed';
+    if (/\b(готово|сделано|выполнено|закрыто|завершено)\b/.test(t)) return 'completed';
+    if (/\b(закрыть|завершить|выполнить)\b/.test(t)) return 'completed';
     if (/ревью|review|фидбек|feedback/.test(t)) return 'review';
     if (/пауз|стоп|блок|blocked/.test(t)) return 'paused';
     if (/в работе|делаю|делаем|процесс|in progress/.test(t)) return 'in_progress';
@@ -2539,7 +2540,8 @@ export function setupHandlers(bot: Bot, services: {
           }
         }
 
-        const inferredStatus = inferStatusFromText(text);
+        const commentOnly = /^\s*коммент(арий)?\s*:/i.test(text);
+        const inferredStatus = commentOnly ? null : inferStatusFromText(text);
         if (!inferredStatus) {
           const fallbackStatus = await resolveFallbackStatusForScope(statusCtx.taskIds);
           const scopedReply = await applyStatusUpdateForScope(
